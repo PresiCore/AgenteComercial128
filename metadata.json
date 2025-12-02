@@ -1,0 +1,5 @@
+{
+  "name": "Agente Comercial 128 (web)",
+  "description": "Constructor de chatbots empresariales. Sube contexto de la empresa, analiza con Gemini 3.0 Pro y genera código de widget insertable.",
+  "requestFramePermissions": []
+}
