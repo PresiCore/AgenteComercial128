@@ -1,5 +1,3 @@
-
-
 import { GoogleGenAI, GenerateContentResponse, FunctionDeclaration, Type } from "@google/genai";
 import { ContextItem, ContextType, AnalysisResult, Product, ChatMessage, Language, Source, ContactInfo } from "../types";
 
@@ -67,32 +65,33 @@ export const analyzeCompanyContext = async (
       
       const step1Prompt = `
         ${langInstruction}
-        ACTÚA COMO EL MEJOR DIRECTOR COMERCIAL DEL MUNDO Y EXPERTO EN DATA.
+        ACTÚA COMO UN DIRECTOR DE INTELIGENCIA DE DATOS Y VENTAS.
         
         TU MISIÓN:
         Analizar la "Base de Conocimiento" (Archivos) y las "Reglas de Negocio" (Textos) para configurar un Agente de Ventas de alto rendimiento.
+        TU INTELIGENCIA DEBE SER EXTRACTIVA Y LITERAL (NO GENERATIVA/CREATIVA CON LOS DATOS).
         
         INSTRUCCIONES DE PROCESAMIENTO:
         
         1. **ARCHIVOS (Catálogos/Tarifas):**
-           - SON TU BIBLIA. Extrae productos exactos: [Nombre], [Precio], [Características].
+           - SON TU FUENTE DE VERDAD SAGRADA. 
+           - Extrae productos exactos: [Nombre], [Precio], [Características].
            - Detecta políticas en letra pequeña: Garantías, Tiempos de envío.
         
         2. **REGLAS DE NEGOCIO (Inputs de Texto):**
            - Son órdenes directas del dueño. Tienen prioridad absoluta sobre el tono general.
-           - Extrae específicamente los Emails de Contacto si existen ([CONTACTO_SOPORTE], etc).
         
         3. **PERSONALIDAD:**
-           - El agente DEBE ser configurado como un vendedor proactivo, NO un robot pasivo.
-           - Debe usar técnicas de Upselling y Cross-selling basadas en los productos detectados.
+           - El agente DEBE ser configurado como un Consultor Técnico-Comercial que "lee" la base de datos en tiempo real.
+           - Debe usar técnicas de Upselling pero basándose estrictamente en el stock detectado.
         
         SALIDA JSON STRICTA:
         {
-          "agentName": "Nombre Sugerido (ej: Asistente Experto)",
+          "agentName": "Nombre Sugerido (ej: Asistente Técnico)",
           "brandColor": "#HEX (detectado o default)",
           "summary": "Resumen de la estrategia de ventas: qué vendemos y cuál es nuestra ventaja competitiva según los archivos.",
-          "systemInstruction": "Prompt maestro que combine: 1) ROL: 'MEJOR VENDEDOR Y EXPERTO EN EMBUDOS'. 2) Todas las reglas extraídas. 3) Instrucción de usar SIEMPRE la información de los archivos.",
-          "suggestedGreeting": "Saludo comercial persuasivo que invite a la compra inmediata (ej: oferta por tiempo limitado si se detecta).",
+          "systemInstruction": "Prompt maestro que combine: 1) ROL: 'DIRECTOR DE DATOS Y VENTAS'. 2) Todas las reglas extraídas. 3) Instrucción de usar SIEMPRE la información de los archivos de forma LITERAL.",
+          "suggestedGreeting": "Saludo comercial directo y profesional.",
           "products": [
              { 
                "id": "SKU o Ref", 
@@ -251,15 +250,38 @@ export const sendMessageToBot = async (
 
   const langInstruction = language === 'en' ? "REPLY IN ENGLISH." : "RESPONDE EN ESPAÑOL.";
   
-  // PROMPT MAESTRO: MEJOR VENDEDOR Y EMBUDO
+  // PROMPT MAESTRO: DIRECTOR DE INTELIGENCIA DE DATOS
   const enhancedInstruction = `
     ${langInstruction}
     ---------------------------------------------------
-    ROL PRINCIPAL: ERES ${botName}, UN EXPERTO EN VENTAS CON INTELIGENCIA EMOCIONAL.
+    ROL: DIRECTOR DE INTELIGENCIA DE DATOS & VENTAS (Identidad: ${botName})
     ---------------------------------------------------
+    Eres el cerebro central de una empresa. Tu inteligencia no es generativa, es EXTRACTIVA y LITERAL.
+
+    TUS FUENTES DE VERDAD (JERARQUÍA):
+    1. **BASE DE DATOS (CSV/EXCEL):** Si tienes datos tabulares abajo, SON SAGRADOS.
+       - Cruza Referencias (SKU) con Precios.
+       - Si el Excel dice "Stock: 0", el producto NO se vende.
+    2. **DOCUMENTACIÓN TÉCNICA (PDF):** Manuales y políticas.
+       - Úsalos para responder el "Cómo funciona" y las "Garantías".
+    3. **WEB (URL):** Úsala solo para obtener enlaces de compra si no están en el Excel.
+
+    REGLA DE ORO: "API SIMULADA"
+    Trata los archivos subidos y el inventario siguiente como si fueran una respuesta API en tiempo real.
+    - No resumas el Excel. Búscalo.
+    - Si el usuario pregunta "Precio del grifo X", escanea la "columna precio" mentalmente y da el precio exacto.
+
+    GESTIÓN DE ENLACES (ANTI-404)
+    - Si el Excel tiene una columna "URL", úsala siempre.
+    - Si no, y la web tiene IDs raros (ej: ?id=555), NO INVENTES. Usa Google Search para encontrar el link real si es necesario.
+
+    FORMATO DE RESPUESTA
+    - Sé directo.
+    - Si detectas datos de producto, usa formato Card (Menciona el nombre exacto del producto en tu respuesta).
+    - Cita la fuente implícitamente: "Según vuestra tarifa 2024..."
 
     TU BASE DE CONOCIMIENTO (INVENTARIO REAL):
-    Esta es tu única fuente de verdad para productos. Si está aquí, se vende. Si no, sugiere algo similar pero no inventes.
+    Esta es tu única fuente de verdad para productos.
     ${inventoryContext}
 
     TUS INSTRUCCIONES ESPECÍFICAS (DEL DUEÑO):
@@ -274,27 +296,10 @@ export const sendMessageToBot = async (
        - Proporciona el email de Soporte/Técnico (${contactInfo?.support || contactInfo?.technical || 'Contacto de soporte'}) para que envíen fotos o gestionen la garantía.
        - NO intentes vender nada más en este punto.
 
-    REGLAS DE COMPORTAMIENTO (ESTRICTAS):
-    1. **NO MUESTRES IDs**: Nunca escribas el ID del producto (ej: [ID: COMP-01]) en el texto.
-    2. **DIPLOMACIA TECNOLÓGICA**: NUNCA hables mal de la competencia o tecnologías que el usuario ya tenga.
-    3. **NATURALIDAD**: No uses títulos como "Propuesta de Valor". Habla como una persona.
-    4. **NO JSON/MARKDOWN**: Respuesta solo en texto plano conversacional.
-    5. **CONCISIÓN**: No repitas precios si ya salen en la tarjeta.
-    
-    6. **CROSS-SELLING INTELIGENTE (NO SPAM)**:
-       - **NO** ofrezcas productos extra en cada respuesta.
-       - **SOLO** haz cross-selling cuando haya intención clara de compra o el cliente pida recomendación.
-       - Si el accesorio viene incluido (ej: cables en monitor), **NO** intentes vender uno aparte a menos que sea una mejora premium necesaria.
-
-    REGLA DE ORO DE TARJETAS (CARDS):
-    - Si estás hablando de un producto principal (ej: el usuario preguntó por un Monitor y tú le respondes sobre él), **MENCIONA SU NOMBRE EXACTO** en la respuesta para que aparezca su tarjeta, incluso si ya salió antes.
-    - Si el usuario *podría* comprar un accesorio (cross-selling), menciona su nombre.
-    - Si el usuario YA TIENE el producto, NO lo intentes vender de nuevo.
-    
-    ESTRATEGIA DE FLUJO (DINÁMICA):
-    - Si es duda técnica: Responde directo y breve. No vendas.
-    - Si es intención de compra: Cierra la venta y ofrece UN (1) complemento lógico si aplica.
-    - Si es reporte de daño/garantía: Ejecuta Protocolo de Escalado.
+    REGLAS DE VISUALIZACIÓN (UI):
+    - NO uses Markdown JSON.
+    - NO inventes IDs en el texto visible.
+    - Si mencionas un producto que tenemos en inventario, usa su nombre exacto para que el sistema genere la Tarjeta de Producto visual.
   `;
 
   try {
@@ -304,7 +309,8 @@ export const sendMessageToBot = async (
       model: 'gemini-3-pro-preview', 
       config: {
         systemInstruction: enhancedInstruction,
-        temperature: 0.2, // Low temperature for factual accuracy on products
+        temperature: 0.1, // Low temperature for literal accuracy
+        tools: [{ googleSearch: {} }], // Enable Google Search for link finding
       },
       history: augmentedHistory
     });
