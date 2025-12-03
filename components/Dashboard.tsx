@@ -1,3 +1,5 @@
+
+
 import React, { useState, useEffect } from 'react';
 import { UserSession, ContextItem, AnalysisResult } from '../types';
 import { analyzeCompanyContext, sendMessageToBot } from '../services/geminiService';
@@ -40,21 +42,41 @@ export const Dashboard: React.FC<DashboardProps> = ({ session }) => {
       if (!session.token) return;
       const config = await dbService.getBotConfig(session.token);
       if (config) {
-        setAnalysisResult(config);
-        // If we have a saved config, jump to preview
+        // Load the analysis result
+        setAnalysisResult(config.analysis);
+        // Load the persistent files/context
+        if (config.contextItems && config.contextItems.length > 0) {
+            setContextItems(config.contextItems);
+        }
+        
+        // If we have a saved config, suggest preview, but user can go back to context to see files
         setActiveTab(DashboardTab.PREVIEW);
       }
     };
     loadConfig();
   }, [session.token]);
 
-  // Effect to AUTO-SAVE whenever analysisResult changes
+  // Effect to AUTO-SAVE whenever analysisResult OR contextItems changes
   useEffect(() => {
     const autoSave = async () => {
-        if (!analysisResult || !session.token) return;
+        if (!session.token) return;
+        
+        // Don't save if empty, unless we are clearing (unlikely in this flow)
+        if (!analysisResult && contextItems.length === 0) return;
+
         setSaveStatus('saving');
         try {
-            await dbService.saveBotConfig(session.token, analysisResult);
+            await dbService.saveBotConfig(
+                session.token, 
+                analysisResult || { 
+                    systemInstruction: '', 
+                    summary: '', 
+                    suggestedGreeting: '', 
+                    keyTopics: [], 
+                    products: [] 
+                }, 
+                contextItems
+            );
             // Artificial delay to show "Saving..." briefly
             setTimeout(() => setSaveStatus('saved'), 800);
         } catch (e) {
@@ -63,9 +85,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ session }) => {
     };
     
     // Debounce slightly to avoid rapid writes during typing
-    const timeout = setTimeout(autoSave, 1000);
+    const timeout = setTimeout(autoSave, 2000);
     return () => clearTimeout(timeout);
-  }, [analysisResult, session.token]);
+  }, [analysisResult, contextItems, session.token]);
 
   const handleAnalyze = async () => {
     if (contextItems.length === 0) {
@@ -153,7 +175,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ session }) => {
               </div>
               
               <div className="hidden md:flex items-center ml-4 pl-4 border-l border-slate-200 dark:border-slate-700">
-                  {analysisResult ? (
+                  {analysisResult || contextItems.length > 0 ? (
                      <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                          <div className={`w-2 h-2 rounded-full ${saveStatus === 'saved' ? 'bg-emerald-500' : 'bg-yellow-500 animate-pulse'}`}></div>
                          <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -257,7 +279,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ session }) => {
                    analysisResult.websiteUrl, 
                    analysisResult.navigationTree, 
                    analysisResult.agentName,
-                   analysisResult.summary
+                   analysisResult.summary,
+                   analysisResult.contactInfo // Pass contact info
                )}
                onColorChange={handleColorChange}
                onNameChange={handleNameChange}

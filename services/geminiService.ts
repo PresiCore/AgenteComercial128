@@ -1,5 +1,7 @@
+
+
 import { GoogleGenAI, GenerateContentResponse, FunctionDeclaration, Type } from "@google/genai";
-import { ContextItem, ContextType, AnalysisResult, Product, ChatMessage, Language, Source } from "../types";
+import { ContextItem, ContextType, AnalysisResult, Product, ChatMessage, Language, Source, ContactInfo } from "../types";
 
 // Initialize Gemini Client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -21,33 +23,28 @@ const getDomainRoot = (urlStr: string): string => {
 
 /**
  * Analyzes the provided company context using Gemini 3.0 Pro.
- * ACTS AS A 2-STEP WEB CRAWLER:
- * Step 1: Architecture & Branding
- * Step 2: Deep Inventory Scanning based on Step 1 Categories
+ * ACTS AS A DATA ENGINEER (Multimodal Analysis)
  */
 export const analyzeCompanyContext = async (
   contextItems: ContextItem[],
   language: Language,
   onProgress?: (phase: string, progress: number) => void
 ): Promise<AnalysisResult> => {
-  
-  // 1. PREPARE BASE CONTEXT
+
+  // 1. PREPARACIÓN DE LA INGESTA MULTIMODAL
   const baseParts: any[] = [];
-  let hasUrls = false;
-  let urlList: string[] = [];
-  let textBuffer = "CONTEXTO DE LA EMPRESA:\n";
+  let textBuffer = "BASE DE CONOCIMIENTO Y REGLAS DEL VENDEDOR:\n";
+  let hasFiles = false;
 
   contextItems.forEach((item) => {
     if (item.type === ContextType.TEXT) {
-      textBuffer += `[INFO INTERNA]: ${item.content}\n`;
-    } else if (item.type === ContextType.URL) {
-      hasUrls = true;
-      urlList.push(item.content);
-      textBuffer += `[URL SEMILLA]: ${item.content}\n`;
+      // Indicaciones explícitas del usuario
+      textBuffer += `[${item.content.includes('[CONTACTO') ? 'CONTACTO' : 'REGLA DE NEGOCIO CRÍTICA'}]: ${item.content}\n\n`;
     } else if (item.type === ContextType.FILE && item.fileData && item.mimeType) {
-      if (textBuffer.length > 0) {
+      hasFiles = true;
+      if (textBuffer.trim()) {
         baseParts.push({ text: textBuffer });
-        textBuffer = "";
+        textBuffer = ""; // Reset buffer
       }
       baseParts.push({
         inlineData: {
@@ -55,172 +52,107 @@ export const analyzeCompanyContext = async (
           mimeType: item.mimeType,
         },
       });
+      baseParts.push({ text: `\n[FUENTE VERDAD: ARCHIVO ${item.fileName}]\n` });
     }
   });
 
-  if (textBuffer.length > 0) {
+  if (textBuffer.trim()) {
     baseParts.push({ text: textBuffer });
   }
 
-  const langInstruction = language === 'en' ? "OUTPUT JSON IN ENGLISH." : "SALIDA JSON EN ESPAÑOL.";
-  let attempt = 0;
-  const maxAttempts = 3;
-
-  while (attempt < maxAttempts) {
-    try {
-      // --- PHASE 1: ARCHITECTURE & BRANDING ---
-      if (onProgress) onProgress(language === 'es' ? "Fase 1: Mapeando arquitectura web..." : "Phase 1: Mapping site architecture...", 10);
+  try {
+      if (onProgress) onProgress(language === 'es' ? "Fase 1: Ingesta de Datos (PDF/Excel)..." : "Phase 1: Data Ingestion...", 20);
       
-      const modelToUse = attempt === 0 ? 'gemini-3-pro-preview' : 'gemini-2.5-pro';
-      console.log(`[Crawler Phase 1] Using ${modelToUse}`);
-
+      const langInstruction = language === 'en' ? "OUTPUT JSON IN ENGLISH." : "SALIDA JSON EN ESPAÑOL.";
+      
       const step1Prompt = `
         ${langInstruction}
-        ACT AS A WEB ARCHITECT & BRAND STRATEGIST.
+        ACTÚA COMO EL MEJOR DIRECTOR COMERCIAL DEL MUNDO Y EXPERTO EN DATA.
         
-        OBJECTIVE: Analyze the provided context/URLs to understand the BUSINESS STRUCTURE.
+        TU MISIÓN:
+        Analizar la "Base de Conocimiento" (Archivos) y las "Reglas de Negocio" (Textos) para configurar un Agente de Ventas de alto rendimiento.
         
-        TASKS:
-        1. **NAVIGATION TREE**: Identify the main product categories from the menu/sitemap.
-           - Find specific URLs for sections like "Laptops", "Phones", "Services", etc.
-        2. **BRANDING**: Detect the primary HEX color and define the agent's personality.
-        3. **SUMMARY**: Create a strategic summary of what the business sells.
+        INSTRUCCIONES DE PROCESAMIENTO:
         
-        ACTIONS (Use Google Search):
-        - Search "site:[domain] sitemap" or "site:[domain]" to find structure.
+        1. **ARCHIVOS (Catálogos/Tarifas):**
+           - SON TU BIBLIA. Extrae productos exactos: [Nombre], [Precio], [Características].
+           - Detecta políticas en letra pequeña: Garantías, Tiempos de envío.
         
-        OUTPUT JSON (NO PRODUCTS YET):
+        2. **REGLAS DE NEGOCIO (Inputs de Texto):**
+           - Son órdenes directas del dueño. Tienen prioridad absoluta sobre el tono general.
+           - Extrae específicamente los Emails de Contacto si existen ([CONTACTO_SOPORTE], etc).
+        
+        3. **PERSONALIDAD:**
+           - El agente DEBE ser configurado como un vendedor proactivo, NO un robot pasivo.
+           - Debe usar técnicas de Upselling y Cross-selling basadas en los productos detectados.
+        
+        SALIDA JSON STRICTA:
         {
-          "systemInstruction": "Define bot personality (Sales Expert).",
-          "agentName": "Agent Name",
-          "summary": "Strategic summary.",
-          "suggestedGreeting": "Short sales greeting.",
-          "brandColor": "#HEX",
-          "websiteUrl": "https://domain.com",
-          "keyTopics": ["Topic 1", "Topic 2"],
-          "navigationTree": [ 
-             { "name": "Category Name", "url": "Real_Category_URL" } 
-          ]
-        }
-      `;
-
-      const step1Response = await ai.models.generateContent({
-        model: modelToUse,
-        contents: { parts: [...baseParts, { text: step1Prompt }] },
-        config: { tools: [{ googleSearch: {} }], temperature: 0.1 }
-      });
-
-      const step1Data = parseGeminiJson<AnalysisResult>(step1Response.text);
-      
-      // Collect sources from Step 1
-      const allSources: Source[] = [];
-      collectSources(step1Response, allSources);
-
-      // --- PHASE 2: DEEP INVENTORY SCANNING ---
-      if (onProgress) onProgress(language === 'es' ? "Fase 2: Escaneando inventario por categorías..." : "Phase 2: Scanning category inventory...", 50);
-      
-      const categories = step1Data.navigationTree?.map(c => c.name).slice(0, 6).join(", ") || "General Products";
-      const domain = step1Data.websiteUrl || (urlList.length > 0 ? urlList[0] : "");
-
-      const step2Prompt = `
-        ${langInstruction}
-        ACT AS A PRODUCT INVENTORY SCANNER.
-        
-        CONTEXT: We have identified these main categories: ${categories}.
-        TARGET DOMAIN: ${domain}
-        
-        OBJECTIVE: Build a robust product database for the chatbot.
-        
-        TASKS:
-        1. For EACH identified category, find 8-12 top-selling or representative products.
-        2. Extract EXACT Name, Price, and REAL BUY URL.
-        3. TOTAL: Aim for 20-30 diverse products.
-        
-        ACTIONS (Use Google Search):
-        - Search "site:${domain} [category] precio" for each category.
-        - Verify the URLs exist.
-        
-        OUTPUT JSON:
-        {
+          "agentName": "Nombre Sugerido (ej: Asistente Experto)",
+          "brandColor": "#HEX (detectado o default)",
+          "summary": "Resumen de la estrategia de ventas: qué vendemos y cuál es nuestra ventaja competitiva según los archivos.",
+          "systemInstruction": "Prompt maestro que combine: 1) ROL: 'MEJOR VENDEDOR Y EXPERTO EN EMBUDOS'. 2) Todas las reglas extraídas. 3) Instrucción de usar SIEMPRE la información de los archivos.",
+          "suggestedGreeting": "Saludo comercial persuasivo que invite a la compra inmediata (ej: oferta por tiempo limitado si se detecta).",
           "products": [
              { 
-               "id": "prod-1", 
-               "name": "Product Name", 
-               "price": "19.99€", 
-               "description": "Brief description", 
-               "buyUrl": "REAL_URL", 
-               "type": "PRODUCT", 
-               "tags": ["category_name", "keyword"] 
+               "id": "SKU o Ref", 
+               "name": "Nombre exacto del archivo", 
+               "price": "Precio exacto con moneda", 
+               "description": "Datos técnicos clave extraídos del PDF/Excel",
+               "buyUrl": "URL si existe o null",
+               "tags": ["tag1"],
+               "type": "PRODUCT"
              }
-          ]
+          ],
+          "navigationTree": [ 
+             { "name": "Categoría Principal", "url": "#" } 
+          ],
+          "contactInfo": {
+             "sales": "email o null",
+             "support": "email o null",
+             "technical": "email o null"
+          }
         }
       `;
 
-      // Simulate progress during heavy Step 2
-      const progressInterval = setInterval(() => {
-         if (onProgress) onProgress(language === 'es' ? "🕷️ Extrayendo catálogo masivo..." : "🕷️ Extracting massive catalog...", 65 + Math.random() * 10);
-      }, 1500);
-
-      const step2Response = await ai.models.generateContent({
-        model: modelToUse, // Use same model for consistency
-        contents: { parts: [...baseParts, { text: step2Prompt }] },
-        config: { tools: [{ googleSearch: {} }], temperature: 0.1 }
+      // Llamamos a Gemini 3.0 Pro
+      const result = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview', 
+        contents: { parts: [...baseParts, { text: step1Prompt }] },
+        config: { temperature: 0.1 }
       });
-      
-      clearInterval(progressInterval);
-      
-      const step2Data = parseGeminiJson<{ products: Product[] }>(step2Response.text);
-      collectSources(step2Response, allSources);
 
-      if (onProgress) onProgress(language === 'es' ? "Finalizando base de datos..." : "Finalizing database...", 90);
+      if (onProgress) onProgress(language === 'es' ? "Configurando vendedor..." : "Configuring salesperson...", 80);
 
-      // --- MERGE & VALIDATE ---
-      const combinedProducts = step2Data.products || [];
-      
-      // Use Step 1 structure + Step 2 products
-      const finalResult: AnalysisResult = {
-          ...step1Data,
-          products: combinedProducts,
-          sources: allSources
-      };
+      const data = parseGeminiJson<AnalysisResult>(result.text);
 
-      // Fallbacks
-      if (!finalResult.websiteUrl && hasUrls) finalResult.websiteUrl = urlList[0];
-      if (!finalResult.agentName) finalResult.agentName = "Asistente";
+      const allSources: Source[] = [];
+      collectSources(result, allSources);
 
-      // Strict Validation
-      if (finalResult.products.length > 0) {
-          const validSourceUris = new Set(allSources.map(s => s.uri));
-          
-          finalResult.products = finalResult.products.filter(p => {
-              const url = p.buyUrl?.toLowerCase() || "";
-              
-              // 1. Format check
-              if (!url.startsWith('http') || url.includes('url_real') || url.includes('tudominio.com')) return false;
-              
-              // 2. Domain check (Flexible Root)
-              if (finalResult.websiteUrl) {
-                  const allowedRoot = getDomainRoot(finalResult.websiteUrl);
-                  if (allowedRoot && !url.includes(allowedRoot)) return false;
-              }
-
-              // 3. Grounding check (Preferred but optional if domain match is strong)
-              // We allow if it matches domain OR is in sources
-              return true; 
-          });
+      if (data.products) {
+        data.products = data.products.map((p, i) => ({
+            ...p,
+            id: p.id || `gen-${Date.now()}-${i}`,
+            type: p.type || 'PRODUCT'
+        }));
+      } else {
+        data.products = [];
       }
 
+      const finalResult: AnalysisResult = {
+          ...data,
+          sources: allSources.length > 0 ? allSources : []
+      };
+
+      if (!finalResult.agentName) finalResult.agentName = "Asistente de Ventas";
+      
       if (onProgress) onProgress("OK", 100);
       return finalResult;
 
-    } catch (error) {
-      console.warn(`Analysis failed on attempt ${attempt + 1}, retrying...`, error);
-      attempt++;
-      if (attempt >= maxAttempts) throw error;
-      await delay(2000);
-    }
+  } catch (error) {
+    console.error("Analysis failed", error);
+    throw error;
   }
-  throw new Error("Analysis failed");
 };
 
 // --- HELPERS ---
@@ -259,7 +191,6 @@ function collectSources(response: GenerateContentResponse, sourcesList: Source[]
 const findProductsInMemory = (query: string, products: Product[]): Product[] => {
     if (!products || products.length === 0) return [];
     
-    // Sanitize query
     const cleanQuery = query.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ ]/g, "").toLowerCase();
     const queryTokens = cleanQuery.split(' ').map(t => t.trim()).filter(t => t.length > 0);
 
@@ -268,26 +199,9 @@ const findProductsInMemory = (query: string, products: Product[]): Product[] => 
         const lowerDesc = p.description.toLowerCase();
         const lowerTags = p.tags ? p.tags.map(t => t.toLowerCase()) : [];
         
-        // --- NEGATIVE KEYWORDS LOGIC (EXCLUSION) ---
-        // Prevent showing accessories when asking for main devices
-        if (cleanQuery.includes('portatil') || cleanQuery.includes('laptop')) {
-             if (lowerName.includes('memoria') || lowerName.includes('ram ') || lowerName.includes('funda') || lowerName.includes('mochila') || lowerName.includes('cargador')) return false;
-        }
-        if (cleanQuery.includes('tablet')) {
-             if (lowerName.includes('funda') || lowerName.includes('cristal') || lowerName.includes('cargador')) return false;
-        }
-        // Prevent showing consoles when asking for games, and vice-versa
-        if (cleanQuery.includes('juego') || cleanQuery.includes('game')) {
-            if (lowerName.includes('consola') || lowerName.includes('console') || lowerName.includes('mando') || lowerName.includes('controller')) return false;
-        }
-        if (cleanQuery.includes('consola') || cleanQuery.includes('ps5') || cleanQuery.includes('xbox')) {
-             if (lowerName.includes('juego') || lowerName.includes('game')) return false;
-        }
-
-        // Direct match
+        // Exact substring match has high priority
         if (lowerName.includes(cleanQuery)) return true;
 
-        // Token match (allow short tokens >= 2 chars)
         let matches = 0;
         let requiredMatches = 1;
         if (queryTokens.length > 2) requiredMatches = 2;
@@ -295,22 +209,18 @@ const findProductsInMemory = (query: string, products: Product[]): Product[] => 
         queryTokens.forEach(token => {
             if (token.length >= 2) {
                 const inName = lowerName.includes(token);
-                const inDesc = lowerDesc.includes(token);
+                // Description match is less important for strict product lookup but good for context
                 const inTags = lowerTags.some(t => t.includes(token));
-                
-                if (inName || inDesc || inTags) {
-                    matches++;
-                }
+                if (inName || inTags) matches++;
             }
         });
-        
         return matches >= requiredMatches;
-    }).slice(0, 5); 
+    }).slice(0, 3); // Limit manual lookup matches
 };
 
 /**
  * Sends a message to the chat model.
- * HYBRID MODE: Memory Lookup + Live Search + CATEGORY RESCUE
+ * HYBRID MODE: Memory Lookup with inventory context injection.
  */
 export const sendMessageToBot = async (
   history: ChatMessage[],
@@ -321,214 +231,130 @@ export const sendMessageToBot = async (
   websiteUrl?: string,
   navigationTree?: any[],
   agentName?: string,
-  contextSummary?: string
+  contextSummary?: string,
+  contactInfo?: ContactInfo
 ): Promise<{ text: string; productCards?: Product[] }> => {
   
-  const botName = agentName || "Asistente";
-  const cleanMessage = currentMessage.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ ]/g, "");
-  const lowerQuery = cleanMessage.toLowerCase();
-
-  // 1. MEMORY CHECK: Products
-  let memoryCards = findProductsInMemory(cleanMessage, availableProducts);
+  const botName = agentName || "Vendedor Experto";
   
-  // 1.5 MEMORY CHECK: Navigation Tree (Category Rescue)
-  // If no products found in memory, try to find a matching Category
-  if (memoryCards.length === 0 && navigationTree) {
-      navigationTree.forEach(cat => {
-          const catName = cat.name.toLowerCase();
-          // Check if category name is in query (e.g. "tablets" in "busco tablets")
-          if (lowerQuery.includes(catName) || catName.includes(lowerQuery)) {
-               memoryCards.push({
-                   id: `nav-mem-${Date.now()}`,
-                   name: `Ver ${cat.name}`,
-                   description: language === 'es' ? `Explora toda la sección de ${cat.name}` : `Explore all ${cat.name}`,
-                   price: "", // Category = No Price
-                   type: "LINK",
-                   buyUrl: cat.url
-               });
-          }
-      });
-  }
+  // Convert CSV/Products to text context
+  const inventoryContext = availableProducts.map(p => 
+      `- [ID: ${p.id}] ${p.name} (${p.price || 'Consultar'}): ${p.description}.`
+  ).join('\n');
 
-  const memoryContext = memoryCards.length > 0 
-      ? `\n[MEMORIA INTERNA]: He encontrado esto en mi base de datos: ${memoryCards.map(p => `${p.name} (${p.buyUrl})`).join(', ')}.`
-      : "";
+  const contactContext = contactInfo ? `
+    CANALES DE CONTACTO OFICIALES (ÚSALOS SI ES NECESARIO):
+    - Soporte / Devoluciones / Garantías: ${contactInfo.support || 'No disponible'}
+    - Ventas Grandes / B2B: ${contactInfo.sales || 'No disponible'}
+    - Servicio Técnico: ${contactInfo.technical || 'No disponible'}
+  ` : '';
 
-  const langInstruction = language === 'en' 
-    ? "REPLY IN ENGLISH." 
-    : "RESPONDE EN ESPAÑOL.";
+  const langInstruction = language === 'en' ? "REPLY IN ENGLISH." : "RESPONDE EN ESPAÑOL.";
   
-  // SALES AGENT PROMPT
+  // PROMPT MAESTRO: MEJOR VENDEDOR Y EMBUDO
   const enhancedInstruction = `
     ${langInstruction}
-    ERES: ${botName}, un asistente de ventas experto.
-    CONTEXTO DEL NEGOCIO (IMPORTANTE): "${contextSummary || 'Tienda online genérica'}"
+    ---------------------------------------------------
+    ROL PRINCIPAL: ERES ${botName}, UN EXPERTO EN VENTAS CON INTELIGENCIA EMOCIONAL.
+    ---------------------------------------------------
+
+    TU BASE DE CONOCIMIENTO (INVENTARIO REAL):
+    Esta es tu única fuente de verdad para productos. Si está aquí, se vende. Si no, sugiere algo similar pero no inventes.
+    ${inventoryContext}
+
+    TUS INSTRUCCIONES ESPECÍFICAS (DEL DUEÑO):
+    "${systemInstruction}"
     
-    REGLA ANTI-ALUCINACIÓN (GROUNDING):
-    - Usa el "CONTEXTO DEL NEGOCIO". Si piden algo fuera de lugar (ej. comida en tienda de electrónica), niégalo educadamente indicando a qué se dedica la tienda.
+    ${contactContext}
+
+    PROTOCOLOS DE ESCALADO Y SOPORTE (PRIORIDAD ALTA):
+    1. Si el cliente menciona: **Producto roto, golpe en transporte, garantía, devolución o fallo técnico grave**.
+       - **ACCIÓN:** DETÉN LA VENTA INMEDIATAMENTE.
+       - Muestra empatía extrema.
+       - Proporciona el email de Soporte/Técnico (${contactInfo?.support || contactInfo?.technical || 'Contacto de soporte'}) para que envíen fotos o gestionen la garantía.
+       - NO intentes vender nada más en este punto.
+
+    REGLAS DE COMPORTAMIENTO (ESTRICTAS):
+    1. **NO MUESTRES IDs**: Nunca escribas el ID del producto (ej: [ID: COMP-01]) en el texto.
+    2. **DIPLOMACIA TECNOLÓGICA**: NUNCA hables mal de la competencia o tecnologías que el usuario ya tenga.
+    3. **NATURALIDAD**: No uses títulos como "Propuesta de Valor". Habla como una persona.
+    4. **NO JSON/MARKDOWN**: Respuesta solo en texto plano conversacional.
+    5. **CONCISIÓN**: No repitas precios si ya salen en la tarjeta.
     
-    REGLA DE ORO (VISUAL FIRST):
-    - TU OBJETIVO ES MOSTRAR CARDS.
-    - **PROHIBIDO** escribir listas de productos en texto.
-    - Si encuentras productos o categorías, di: "Aquí tienes lo que buscas:" y genera la lista de enlaces para activar las cards.
+    6. **CROSS-SELLING INTELIGENTE (NO SPAM)**:
+       - **NO** ofrezcas productos extra en cada respuesta.
+       - **SOLO** haz cross-selling cuando haya intención clara de compra o el cliente pida recomendación.
+       - Si el accesorio viene incluido (ej: cables en monitor), **NO** intentes vender uno aparte a menos que sea una mejora premium necesaria.
+
+    REGLA DE ORO DE TARJETAS (CARDS):
+    - Si estás hablando de un producto principal (ej: el usuario preguntó por un Monitor y tú le respondes sobre él), **MENCIONA SU NOMBRE EXACTO** en la respuesta para que aparezca su tarjeta, incluso si ya salió antes.
+    - Si el usuario *podría* comprar un accesorio (cross-selling), menciona su nombre.
+    - Si el usuario YA TIENE el producto, NO lo intentes vender de nuevo.
     
-    ESTRATEGIA HÍBRIDA DE BÚSQUEDA:
-    1. Revisa mi MEMORIA INTERNA. Si hay coincidencias, úsalas.
-    2. SI NO, busca en Google.
-       - Si el usuario busca un producto específico, busca precio.
-       - Si el usuario busca una CATEGORÍA (ej. "Tablets", "Portátiles"), busca la URL de la sección (ej. tudominio.com/tablets).
-    
-    FORMATO OBLIGATORIO:
-    - Frase muy corta (Max 10 palabras).
-    - LISTA DE VIÑETAS con los enlaces encontrados.
-    
-    ${memoryContext}
+    ESTRATEGIA DE FLUJO (DINÁMICA):
+    - Si es duda técnica: Responde directo y breve. No vendas.
+    - Si es intención de compra: Cierra la venta y ofrece UN (1) complemento lógico si aplica.
+    - Si es reporte de daño/garantía: Ejecuta Protocolo de Escalado.
   `;
 
   try {
-    const augmentedHistory = [
-        ...history.map(h => ({ role: h.role, parts: [{ text: h.text }] })),
-    ];
+    const augmentedHistory = history.map(h => ({ role: h.role, parts: [{ text: h.text }] }));
 
     const chat = ai.chats.create({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-pro-preview', 
       config: {
         systemInstruction: enhancedInstruction,
-        tools: [{ googleSearch: {} }],
+        temperature: 0.2, // Low temperature for factual accuracy on products
       },
       history: augmentedHistory
     });
 
-    let finalMessage = cleanMessage;
-    // Don't force "buy" if it's a broad category search, allows finding section pages
-    if (finalMessage.length < 50 && !lowerQuery.includes('comprar')) {
-        // Just search the term + site to find categories
-    }
-
-    const result: GenerateContentResponse = await chat.sendMessage({
-      message: finalMessage
-    });
-
+    const result = await chat.sendMessage({ message: currentMessage });
     let responseText = result.text || "";
-    let liveCards: Product[] = [];
 
-    // 2. LIVE GROUNDING: Extract cards from Google Search
-    const groundingChunks = result.candidates?.[0]?.groundingMetadata?.groundingChunks;
+    // --- CLEANUP SAFETY NET (Post-procesado) ---
     
-    if (groundingChunks && groundingChunks.length > 0) {
-        const seenUrls = new Set<string>();
-        memoryCards.forEach(p => p.buyUrl && seenUrls.add(p.buyUrl));
-
-        let allowedRoot = "";
-        try {
-            if (websiteUrl) {
-                allowedRoot = getDomainRoot(websiteUrl);
-            }
-        } catch (e) {}
-
-        groundingChunks.forEach((chunk: any, index: number) => {
-            const uri = chunk.web?.uri;
-            const title = chunk.web?.title;
-            
-            if (uri && title && !seenUrls.has(uri)) {
-                const lowerUri = uri.toLowerCase();
-                
-                // Flexible Domain Filtering
-                const isCorrectDomain = allowedRoot ? lowerUri.includes(allowedRoot) : true;
-                if (!isCorrectDomain) return;
-
-                // Blacklist irrelevant pages
-                if (lowerUri.includes('login') || lowerUri.includes('cart') || lowerUri.includes('politica')) return;
-
-                seenUrls.add(uri);
-                
-                // Try to find price
-                const priceMatch = title.match(/(\d+[.,]\d{2})\s?€/);
-                let price = priceMatch ? priceMatch[0] : "";
-                let type: 'PRODUCT' | 'LINK' = 'PRODUCT';
-
-                // --- CATEGORY RESCUE & PRODUCT MATCH LOGIC ---
-                // Lower the token limit to 2 to catch "8gb", "ram", "hp"
-                const queryTerms = cleanMessage.split(' ').filter(t => t.length >= 2); 
-                const isUrlMatchingQuery = queryTerms.some(t => lowerUri.includes(t.toLowerCase()));
-                const isCategoryLike = lowerUri.includes('category') || lowerUri.includes('familia') || lowerUri.includes('seccion') || lowerUri.includes('listado');
-                
-                // Some ecommerces use specific patterns for products (e.g. MediaMarkt uses /p/ or .html not in category)
-                const isProductLike = lowerUri.includes('/p/') || lowerUri.includes('/product/') || lowerUri.includes('/producto/') || (lowerUri.includes('.html') && !isCategoryLike);
-
-                if (!price) {
-                     if (isCategoryLike) {
-                         type = 'LINK';
-                         price = ""; // Visual indicator handled by component
-                     } else if (isProductLike || isUrlMatchingQuery) {
-                         // If it looks like a product URL or strongly matches query, allow it even without price
-                         // This fixes the issue where product pages are discarded because title lacks price
-                         type = 'PRODUCT';
-                         price = ""; // Will render as "Ver Precio"
-                     } else {
-                         return; 
-                     }
-                }
-                
-                let cleanTitle = title.split(/[-|]/)[0].trim();
-                if (cleanTitle.length > 50) cleanTitle = cleanTitle.substring(0, 47) + "...";
-
-                liveCards.push({
-                    id: `live-${Date.now()}-${index}`,
-                    name: cleanTitle,
-                    description: language === 'es' ? (type === 'LINK' ? "Ver Catálogo Completo" : "Disponible en tienda") : "View Category",
-                    price: price, 
-                    type: type,
-                    buyUrl: uri,
-                    imageUrl: "" 
-                });
-            }
-        });
-    }
-
-    // 3. MERGE & FALLBACK
-    let allCards: Product[] = [...liveCards, ...memoryCards]; 
+    // 1. Eliminar IDs filtrados si el LLM falla (ej: [ID: XXX])
+    responseText = responseText.replace(/\[ID:\s*[^\]]+\]/gi, '');
+    responseText = responseText.replace(/\(ID:\s*[^)]+\)/gi, '');
     
-    // Deduplicate
-    const uniqueCards: Product[] = [];
-    const urlSet = new Set();
-    allCards.forEach(c => {
-        if (c.buyUrl && !urlSet.has(c.buyUrl)) {
-            urlSet.add(c.buyUrl);
-            uniqueCards.push(c);
+    // 2. Eliminar meta-headers comerciales explícitos
+    responseText = responseText.replace(/###\s*Propuesta de Valor.*?(\n|$)/gi, '');
+    responseText = responseText.replace(/\*\*Propuesta de Valor.*?\*\*/gi, '');
+    responseText = responseText.replace(/###\s*Cross-selling.*?(\n|$)/gi, '');
+
+    // 3. CRÍTICO: Eliminar bloques de JSON y residuos de código
+    responseText = responseText.replace(/```[\s\S]*?```/g, '');
+    responseText = responseText.replace(/{[\s\n]*"products"[\s\S]*?}/g, '');
+    
+    // 4. LIMPIEZA AGRESIVA DE SÍMBOLOS FINALES
+    responseText = responseText.replace(/[\s\n]+[}\]]+[\s\n]*[}\]]*$/g, '');
+
+    // Post-processing for Cards
+    const foundCards: Product[] = [];
+    const lowerResponse = responseText.toLowerCase();
+
+    // 1. Detección ESTRICTA: Solo mostrar productos que el BOT ha mencionado explícitamente.
+    availableProducts.forEach(prod => {
+        // Normalizamos nombre e ID para búsqueda flexible
+        const lowerName = prod.name.toLowerCase();
+        const lowerId = prod.id.toLowerCase();
+        
+        // Verificamos si el nombre exacto o el ID aparecen en el texto generado
+        if (lowerResponse.includes(lowerId) || lowerResponse.includes(lowerName)) {
+            if (!foundCards.find(c => c.id === prod.id)) {
+                foundCards.push(prod);
+            }
         }
     });
-
-    // CLEANUP RESPONSE TEXT
-    const splitLines = responseText.split('\n');
-    let cleanText = "";
-    for (const line of splitLines) {
-        if (line.trim().startsWith('*') || line.trim().startsWith('-') || line.trim().match(/^\d+\./)) continue; 
-        if (line.includes('http')) continue;
-        cleanText += line + "\n";
-    }
-
-    // GHOST MESSAGE FIX
-    if (uniqueCards.length === 0) {
-        const lowerText = cleanText.toLowerCase();
-        if (lowerText.includes('aquí tienes') || lowerText.includes('opciones')) {
-             cleanText = language === 'es' 
-              ? `No he encontrado resultados exactos, pero puedes explorar la tienda aquí: ${websiteUrl || ''}`
-              : `I couldn't find exact matches, please explore the store here: ${websiteUrl || ''}`;
-        }
-    } else {
-        if (!cleanText.trim() || cleanText.length < 5) {
-             cleanText = language === 'es' ? "Aquí tienes las mejores opciones:" : "Here are the best options:";
-        }
-    }
 
     return {
-      text: cleanText.trim(),
-      productCards: uniqueCards.length > 0 ? uniqueCards : undefined
+      text: responseText.trim(),
+      productCards: foundCards.length > 0 ? foundCards : undefined
     };
 
   } catch (error) {
     console.error("Chat error", error);
-    return { text: language === 'es' ? "Un momento, estoy consultando el catálogo..." : "One moment, checking catalog..." };
+    return { text: language === 'es' ? "Un segundo, estoy consultando el stock..." : "One moment, checking stock..." };
   }
 };

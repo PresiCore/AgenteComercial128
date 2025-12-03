@@ -44,6 +44,12 @@ export interface Source {
   uri: string;
 }
 
+export interface ContactInfo {
+  sales?: string;
+  support?: string;
+  technical?: string;
+}
+
 export interface AnalysisResult {
   agentName?: string; // Customizable bot name
   systemInstruction: string;
@@ -55,6 +61,7 @@ export interface AnalysisResult {
   brandColor?: string; // Hex code for brand branding
   sources?: Source[]; // Structured list of detected sources
   websiteUrl?: string; // Main website URL detected
+  contactInfo?: ContactInfo; // New: Contact channels
 }
 
 export interface ChatMessage {

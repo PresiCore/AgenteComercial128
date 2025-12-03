@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { AnalysisResult, ChatMessage, Product } from '../types';
 import { SendIcon, BotIcon, ChevronLeftIcon, ChevronRightIcon } from './Icons';
@@ -19,63 +20,93 @@ const CartIcon = ({ count }: { count: number }) => (
   </div>
 );
 
-// Helper to convert Markdown links and Bold to HTML
+// Helper to convert basic Markdown to HTML elements
 const renderMessageText = (text: string) => {
-  const urlRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-  const boldRegex = /\*\*([^*]+)\*\*/g;
+  // Split by new lines to handle block formatting
+  const lines = text.split('\n');
   
-  const partsWithLinks: (string | React.ReactElement)[] = [];
-  let lastIndex = 0;
-  let match;
-
-  // 1. Process Links
-  while ((match = urlRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      partsWithLinks.push(text.substring(lastIndex, match.index));
-    }
-    partsWithLinks.push(
-      <a 
-        key={`link-${match.index}`} 
-        href={match[2]} 
-        target="_blank" 
-        rel="noopener noreferrer" 
-        className="underline decoration-white/50 hover:decoration-white font-semibold break-all transition-all"
-        style={{ color: 'inherit' }}
-      >
-        {match[1]}
-      </a>
-    );
-    lastIndex = urlRegex.lastIndex;
-  }
-  if (lastIndex < text.length) {
-    partsWithLinks.push(text.substring(lastIndex));
-  }
-
-  // 2. Process Bold inside string parts
-  return partsWithLinks.flatMap((part, i) => {
-    if (typeof part === 'string') {
-      const subParts = [];
-      let lastBIndex = 0;
-      let bMatch;
-      
-      // Reset regex for new string
-      boldRegex.lastIndex = 0;
-      
-      while ((bMatch = boldRegex.exec(part)) !== null) {
-        if (bMatch.index > lastBIndex) {
-            subParts.push(part.substring(lastBIndex, bMatch.index));
-        }
-        // Render bold text
-        subParts.push(<strong key={`bold-${i}-${bMatch.index}`} className="font-bold">{bMatch[1]}</strong>);
-        lastBIndex = boldRegex.lastIndex;
+  return lines.map((line, lineIdx) => {
+      // 1. Headers (### Title)
+      if (line.trim().startsWith('###')) {
+          return (
+              <h3 key={lineIdx} className="text-sm font-bold mt-3 mb-1 text-inherit opacity-90 block">
+                  {line.replace(/^###\s+/, '')}
+              </h3>
+          );
       }
-      if (lastBIndex < part.length) {
-        subParts.push(part.substring(lastBIndex));
+      
+      // 2. Lists (* Item or - Item)
+      if (line.trim().startsWith('* ') || line.trim().startsWith('- ')) {
+          const content = line.trim().substring(2);
+          return (
+              <div key={lineIdx} className="flex items-start gap-2 mb-1 pl-1">
+                  <span className="text-xs mt-1.5 opacity-60">•</span>
+                  <span className="flex-1">{parseInlineStyles(content)}</span>
+              </div>
+          );
       }
-      return subParts.length > 0 ? subParts : [part];
-    }
-    return part;
+
+      // 3. Normal Paragraph (handle empty lines as spacers)
+      if (line.trim() === '') {
+          return <div key={lineIdx} className="h-2" />;
+      }
+
+      return (
+          <p key={lineIdx} className="mb-0.5 leading-relaxed">
+              {parseInlineStyles(line)}
+          </p>
+      );
   });
+};
+
+// Helper for inline styles (Links and Bold) within a line
+const parseInlineStyles = (text: string) => {
+  const urlRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+  // Improved Regex: capture any character non-greedily between **
+  const boldRegex = /\*\*(.+?)\*\*/g;
+  
+  const parts: (string | React.ReactNode)[] = [];
+  
+  // We'll split by bold first as it's more common, then by links
+  
+  text.split(boldRegex).forEach((part, i) => {
+      // Even indices are normal text, Odd indices are captured BOLD text
+      if (i % 2 === 1) {
+          parts.push(<strong key={`b-${i}`} className="font-bold">{part}</strong>);
+      } else {
+          // Process links in the "normal" part
+          let subLastIndex = 0;
+          let match;
+          // Reset regex state
+          urlRegex.lastIndex = 0;
+          
+          while ((match = urlRegex.exec(part)) !== null) {
+              // Text before link
+              if (match.index > subLastIndex) {
+                  parts.push(part.substring(subLastIndex, match.index));
+              }
+              // Link
+              parts.push(
+                  <a 
+                    key={`l-${i}-${match.index}`} 
+                    href={match[2]} 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="underline decoration-current opacity-80 hover:opacity-100 font-semibold break-all transition-all"
+                  >
+                    {match[1]}
+                  </a>
+              );
+              subLastIndex = urlRegex.lastIndex;
+          }
+          // Remaining text
+          if (subLastIndex < part.length) {
+              parts.push(part.substring(subLastIndex));
+          }
+      }
+  });
+
+  return parts;
 };
 
 // --- Product Carousel Component ---
@@ -147,13 +178,14 @@ const ProductCarousel: React.FC<ProductCarouselProps> = ({ products, brandColor,
                     className="w-full py-1.5 text-white text-[10px] font-bold rounded-lg transition-transform active:scale-95 flex justify-center items-center gap-1 shadow-sm hover:shadow-md"
                     style={{ backgroundColor: brandColor }}
                   >
-                    {product.price ? t.buyNow : t.viewDetail}
+                    {t.viewDetail}
                   </button>
                   
                   {product.price && (
                     <button 
                       onClick={() => onAddToCart(product)}
-                      className="w-full py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 text-[10px] font-medium rounded-lg transition-colors border border-gray-100"
+                      className="w-full py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 text-[10px] font-medium rounded-lg transition-colors border border-gray-100 whitespace-nowrap overflow-hidden text-ellipsis px-1"
+                      title={t.addToCart}
                     >
                       {t.addToCart}
                     </button>
@@ -233,7 +265,7 @@ export const ChatPreview: React.FC<ChatPreviewProps> = ({ analysis, onSendMessag
     if (product.buyUrl) {
         window.open(product.buyUrl, '_blank');
     } else {
-        alert(`Checkout: ${product.name}`);
+        alert(`Details for: ${product.name}`);
     }
   };
 

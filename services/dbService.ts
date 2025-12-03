@@ -1,7 +1,8 @@
+
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { getAnalytics } from "firebase/analytics";
-import { UserSession, AnalysisResult } from "../types";
+import { UserSession, AnalysisResult, ContextItem } from "../types";
 
 // Firebase Configuration provided by user
 const firebaseConfig = {
@@ -23,6 +24,7 @@ const analytics = getAnalytics(app);
 // Types for DB
 export interface BotConfiguration {
   analysis: AnalysisResult;
+  contextItems: ContextItem[]; // New: Persist the source files/rules
   updatedAt: string;
   deployed: boolean;
 }
@@ -38,10 +40,9 @@ export interface DbClient {
 export const dbService = {
   /**
    * Validates a token against the Firestore 'clients' collection.
-   * Includes a hardcoded fallback for the ADMIN token to ensure access before DB setup.
    */
   validateToken: async (token: string): Promise<UserSession | null> => {
-    // 1. Hardcoded Admin Backdoor (Crucial for initial setup)
+    // 1. Hardcoded Admin Backdoor
     if (token === 'ADMIN_TOKEN_SECURE_128') {
       return {
         token,
@@ -60,7 +61,6 @@ export const dbService = {
       if (!querySnapshot.empty) {
         const clientDoc = querySnapshot.docs[0].data() as DbClient;
         
-        // Return valid session based on DB data
         return {
           token: clientDoc.token,
           email: clientDoc.email,
@@ -73,7 +73,7 @@ export const dbService = {
 
     } catch (error) {
       console.error("Error validating token in Firestore:", error);
-      // Fallback for simulation/offline if DB fails
+      // Fallback for simulation
       if (token === 'demo123') {
           return { token: 'demo123', email: 'demo@user.com', isActive: true, role: 'user' };
       }
@@ -82,22 +82,26 @@ export const dbService = {
   },
 
   /**
-   * Saves the generated bot configuration to Firestore.
+   * Saves the generated bot configuration AND the context items (files) to Firestore.
    */
-  saveBotConfig: async (token: string, analysis: AnalysisResult): Promise<void> => {
+  saveBotConfig: async (token: string, analysis: AnalysisResult, contextItems: ContextItem[]): Promise<void> => {
     try {
-      // We use the token as the document ID for the config for 1-to-1 mapping
-      // In a real multi-user scenario, we might use a separate ID or Client ID.
       const configRef = doc(db, "bot_configs", token);
       
+      const sanitizedAnalysis = JSON.parse(JSON.stringify(analysis));
+      // Note: Firestore has a 1MB limit per doc. Large files might need Firebase Storage in production.
+      // For this implementation, we assume files are optimized or small PDFs/CSVs.
+      const sanitizedContext = JSON.parse(JSON.stringify(contextItems));
+
       const configData: BotConfiguration = {
-        analysis,
+        analysis: sanitizedAnalysis,
+        contextItems: sanitizedContext,
         updatedAt: new Date().toISOString(),
         deployed: true
       };
 
       await setDoc(configRef, configData, { merge: true });
-      console.log("Configuration saved to Firestore for token:", token);
+      console.log("Full configuration (including files) saved for:", token);
     } catch (error) {
       console.error("Error saving config to Firestore:", error);
       throw error;
@@ -107,14 +111,14 @@ export const dbService = {
   /**
    * Retrieves an existing bot configuration from Firestore.
    */
-  getBotConfig: async (token: string): Promise<AnalysisResult | null> => {
+  getBotConfig: async (token: string): Promise<BotConfiguration | null> => {
     try {
       const configRef = doc(db, "bot_configs", token);
       const docSnap = await getDoc(configRef);
 
       if (docSnap.exists()) {
         const data = docSnap.data() as BotConfiguration;
-        return data.analysis;
+        return data; // Return full object including contextItems
       }
       return null;
     } catch (error) {
