@@ -1,4 +1,3 @@
-
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, getDoc, setDoc, collection, query, where, getDocs } from "firebase/firestore";
 import { getAnalytics } from "firebase/analytics";
@@ -35,6 +34,7 @@ export interface DbClient {
   isActive: boolean;
   role: 'admin' | 'user';
   domain?: string;
+  expirationDate?: string | null;
 }
 
 export const dbService = {
@@ -61,6 +61,24 @@ export const dbService = {
       if (!querySnapshot.empty) {
         const clientDoc = querySnapshot.docs[0].data() as DbClient;
         
+        // --- NUEVA LÓGICA DE CADUCIDAD ---
+        if (clientDoc.expirationDate) {
+            const now = new Date();
+            const expiration = new Date(clientDoc.expirationDate);
+            
+            // Si hoy es mayor que la fecha de expiración -> Bloquear
+            if (now > expiration) {
+                console.warn("Token caducado el:", expiration);
+                return { 
+                    token: clientDoc.token,
+                    email: clientDoc.email,
+                    isActive: false, // Forzamos inactivo para que el login falle visualmente
+                    role: clientDoc.role || 'user'
+                };
+            }
+        }
+        // ---------------------------------
+        
         return {
           token: clientDoc.token,
           email: clientDoc.email,
@@ -73,11 +91,7 @@ export const dbService = {
 
     } catch (error) {
       console.error("Error validating token in Firestore:", error);
-      // Fallback for simulation
-      if (token === 'demo123') {
-          return { token: 'demo123', email: 'demo@user.com', isActive: true, role: 'user' };
-      }
-      throw error;
+      return null;
     }
   },
 
