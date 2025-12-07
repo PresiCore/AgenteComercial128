@@ -123,7 +123,7 @@ export const analyzeCompanyContext = async (
 
       if (onProgress) onProgress(language === 'es' ? "Configurando vendedor..." : "Configuring salesperson...", 80);
 
-      const data = parseGeminiJson<AnalysisResult>(result.text);
+      const data = parseGeminiJson<AnalysisResult>(result.text || "");
 
       const allSources: Source[] = [];
       collectSources(result, allSources);

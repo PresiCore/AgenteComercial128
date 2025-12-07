@@ -1,4 +1,3 @@
-
 export enum AppView {
   AUTH = 'AUTH',
   DASHBOARD = 'DASHBOARD',
@@ -75,4 +74,26 @@ export interface UserSession {
   email: string;
   isActive: boolean; // Simulates payment status
   role?: 'admin' | 'user';
+}
+
+// --- TIPOS NUEVOS (Fusionados) ---
+
+export interface ServiceItem {
+  title: string;
+  description: string;
+  icon: 'brain' | 'cpu' | 'message' | 'barChart';
+}
+
+export interface SaasProduct {
+  id: string;
+  name: string;
+  description: string;
+  price: string;
+  category: 'Automation' | 'Chatbot' | 'Data';
+  status: 'available' | 'deploying' | 'active' | 'paused';
+  iconName: 'Bot' | 'FileText' | 'Workflow' | 'Database';
+  demoId?: 'sdr' | 'invoice' | 'social' | 'legal';
+  token?: string;
+  trialEndsAt?: string;
+  serviceUrl?: string;
 }

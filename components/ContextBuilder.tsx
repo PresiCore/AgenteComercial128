@@ -331,7 +331,7 @@ export const ContextBuilder: React.FC<ContextBuilderProps> = ({ items, onUpdate 
                          <TrashIcon className="w-4 h-4" />
                       </button>
                    </li>
-                 )}}
+                 );})}
                </ul>
              )}
            </div>
