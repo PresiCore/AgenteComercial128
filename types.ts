@@ -17,8 +17,9 @@ export interface ContextItem {
   type: ContextType;
   content: string; // Text content or URL
   fileName?: string;
-  fileData?: string; // Base64 for files
+  fileData?: string | null; // Base64 for files
   mimeType?: string;
+  storageUrl?: string; // URL from Firebase Storage
 }
 
 export interface SiteCategory {
