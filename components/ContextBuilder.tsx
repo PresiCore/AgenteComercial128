@@ -1,5 +1,3 @@
-
-
 import React, { useState, useEffect } from 'react';
 import { ContextItem, ContextType } from '../types';
 import { TrashIcon, UploadIcon, BotIcon, UsersIcon } from './Icons';
@@ -14,6 +12,7 @@ export const ContextBuilder: React.FC<ContextBuilderProps> = ({ items, onUpdate 
   const { t } = useApp();
   const [inputText, setInputText] = useState('');
   const [uploadFeedback, setUploadFeedback] = useState<string[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // State for Contact Emails
   const [supportEmail, setSupportEmail] = useState('');
@@ -63,8 +62,21 @@ export const ContextBuilder: React.FC<ContextBuilderProps> = ({ items, onUpdate 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    setErrorMessage(null);
 
     const feedbackMessages: Set<string> = new Set();
+    const validFiles: File[] = [];
+    const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+
+    // Validation Phase
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.size > MAX_SIZE) {
+            setErrorMessage(`El archivo ${file.name} excede el límite de 5MB.`);
+            return;
+        }
+        validFiles.push(file);
+    }
     
     const readFile = (file: File): Promise<ContextItem> => {
       return new Promise((resolve) => {
@@ -98,7 +110,7 @@ export const ContextBuilder: React.FC<ContextBuilderProps> = ({ items, onUpdate 
     };
 
     try {
-      const newItems = await Promise.all(Array.from(files).map(readFile));
+      const newItems = await Promise.all(validFiles.map(readFile));
 
       setUploadFeedback(Array.from(feedbackMessages));
       onUpdate([...items, ...newItems]);
@@ -107,6 +119,7 @@ export const ContextBuilder: React.FC<ContextBuilderProps> = ({ items, onUpdate 
       e.target.value = '';
     } catch (error) {
       console.error("Error processing files:", error);
+      setErrorMessage("Error al procesar archivos.");
     }
   };
 
@@ -246,7 +259,7 @@ export const ContextBuilder: React.FC<ContextBuilderProps> = ({ items, onUpdate 
                          {t.uploadLabel}
                       </p>
                       <p className="text-xs text-slate-400">
-                         {t.uploadSubLabel}
+                         {t.uploadSubLabel} (Max 5MB)
                       </p>
                   </div>
 
@@ -264,6 +277,11 @@ export const ContextBuilder: React.FC<ContextBuilderProps> = ({ items, onUpdate 
                   <input type="file" className="hidden" onChange={handleFileUpload} accept=".pdf,.csv,.xlsx,.txt,.json,.doc,.docx" multiple />
               </label>
            </div>
+           {errorMessage && (
+                <div className="mt-2 text-xs text-red-500 font-bold animate-fade-in">
+                    ⚠️ {errorMessage}
+                </div>
+           )}
         </div>
       </div>
 

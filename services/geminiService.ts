@@ -1,23 +1,8 @@
-import { GoogleGenAI, GenerateContentResponse, FunctionDeclaration, Type } from "@google/genai";
+import { GoogleGenAI, GenerateContentResponse, Type, Schema } from "@google/genai";
 import { ContextItem, ContextType, AnalysisResult, Product, ChatMessage, Language, Source, ContactInfo } from "../types";
 
 // Initialize Gemini Client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-// Helper for delay
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-// Helper: Extract Root Domain (e.g., "pcbox.com" -> "pcbox", "www.tienda.pcbox.es" -> "pcbox")
-const getDomainRoot = (urlStr: string): string => {
-  try {
-    const hostname = new URL(urlStr).hostname;
-    const parts = hostname.replace(/^www\./, '').split('.');
-    // Return the first part usually represents the brand in standard domains
-    return parts[0].toLowerCase();
-  } catch (e) { 
-    return ""; 
-  }
-};
 
 /**
  * Analyzes the provided company context using Gemini 3.0 Pro.
@@ -61,7 +46,7 @@ export const analyzeCompanyContext = async (
   try {
       if (onProgress) onProgress(language === 'es' ? "Fase 1: Ingesta de Datos (PDF/Excel)..." : "Phase 1: Data Ingestion...", 20);
       
-      const langInstruction = language === 'en' ? "OUTPUT JSON IN ENGLISH." : "SALIDA JSON EN ESPAÑOL.";
+      const langInstruction = language === 'en' ? "OUTPUT ENGLISH." : "SALIDA ESPAÑOL.";
       
       const step1Prompt = `
         ${langInstruction}
@@ -72,66 +57,82 @@ export const analyzeCompanyContext = async (
         TU INTELIGENCIA DEBE SER EXTRACTIVA Y LITERAL (NO GENERATIVA/CREATIVA CON LOS DATOS).
         
         INSTRUCCIONES DE PROCESAMIENTO:
+        1. **ARCHIVOS (Catálogos/Tarifas):** SON TU FUENTE DE VERDAD SAGRADA. Extrae productos exactos.
+        2. **REGLAS DE NEGOCIO:** Prioridad absoluta sobre el tono general.
         
-        1. **ARCHIVOS (Catálogos/Tarifas):**
-           - SON TU FUENTE DE VERDAD SAGRADA. 
-           - Extrae productos exactos: [Nombre], [Precio], [Características].
-           - Detecta políticas en letra pequeña: Garantías, Tiempos de envío.
-        
-        2. **REGLAS DE NEGOCIO (Inputs de Texto):**
-           - Son órdenes directas del dueño. Tienen prioridad absoluta sobre el tono general.
-        
-        3. **PERSONALIDAD:**
-           - El agente DEBE ser configurado como un Consultor Técnico-Comercial que "lee" la base de datos en tiempo real.
-           - Debe usar técnicas de Upselling pero basándose estrictamente en el stock detectado.
-        
-        SALIDA JSON STRICTA:
-        {
-          "agentName": "Nombre Sugerido (ej: Asistente Técnico)",
-          "brandColor": "#HEX (detectado o default)",
-          "summary": "Resumen de la estrategia de ventas: qué vendemos y cuál es nuestra ventaja competitiva según los archivos.",
-          "systemInstruction": "Prompt maestro que combine: 1) ROL: 'DIRECTOR DE DATOS Y VENTAS'. 2) Todas las reglas extraídas. 3) Instrucción de usar SIEMPRE la información de los archivos de forma LITERAL.",
-          "suggestedGreeting": "Saludo comercial directo y profesional.",
-          "products": [
-             { 
-               "id": "SKU o Ref", 
-               "name": "Nombre exacto del archivo", 
-               "price": "Precio exacto con moneda", 
-               "description": "Datos técnicos clave extraídos del PDF/Excel",
-               "buyUrl": "URL si existe o null",
-               "tags": ["tag1"],
-               "type": "PRODUCT"
-             }
-          ],
-          "navigationTree": [ 
-             { "name": "Categoría Principal", "url": "#" } 
-          ],
-          "contactInfo": {
-             "sales": "email o null",
-             "support": "email o null",
-             "technical": "email o null"
-          }
-        }
+        Define la estructura JSON exacta para el agente.
       `;
+
+      // Define Output Schema for Analysis
+      const analysisSchema: Schema = {
+        type: Type.OBJECT,
+        properties: {
+            agentName: { type: Type.STRING, description: "Nombre sugerido para el bot (ej: Asistente Técnico)." },
+            brandColor: { type: Type.STRING, description: "Código Hex del color de marca predominante." },
+            summary: { type: Type.STRING, description: "Resumen ejecutivo de la estrategia de ventas detectada." },
+            systemInstruction: { type: Type.STRING, description: "Prompt maestro del sistema para el chatbot." },
+            suggestedGreeting: { type: Type.STRING, description: "Un saludo inicial corto y comercial." },
+            products: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        id: { type: Type.STRING },
+                        name: { type: Type.STRING },
+                        price: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                        buyUrl: { type: Type.STRING, nullable: true },
+                        type: { type: Type.STRING, enum: ["PRODUCT", "SERVICE", "LINK"] },
+                        tags: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    }
+                }
+            },
+            navigationTree: {
+                type: Type.ARRAY,
+                items: {
+                    type: Type.OBJECT,
+                    properties: {
+                        name: { type: Type.STRING },
+                        url: { type: Type.STRING }
+                    }
+                }
+            },
+            contactInfo: {
+                type: Type.OBJECT,
+                properties: {
+                    sales: { type: Type.STRING, nullable: true },
+                    support: { type: Type.STRING, nullable: true },
+                    technical: { type: Type.STRING, nullable: true }
+                }
+            }
+        },
+        required: ["agentName", "systemInstruction", "products", "summary"]
+      };
 
       // Llamamos a Gemini 3.0 Pro
       const result = await ai.models.generateContent({
         model: 'gemini-3-pro-preview', 
         contents: { parts: [...baseParts, { text: step1Prompt }] },
-        config: { temperature: 0.1 }
+        config: { 
+            temperature: 0.1,
+            responseMimeType: "application/json",
+            responseSchema: analysisSchema
+        }
       });
 
       if (onProgress) onProgress(language === 'es' ? "Configurando vendedor..." : "Configuring salesperson...", 80);
 
-      const data = parseGeminiJson<AnalysisResult>(result.text || "");
+      // With responseSchema, result.text is guaranteed to be valid JSON string
+      const data = JSON.parse(result.text || "{}") as AnalysisResult;
 
       const allSources: Source[] = [];
       collectSources(result, allSources);
 
+      // Post-process IDs
       if (data.products) {
         data.products = data.products.map((p, i) => ({
             ...p,
-            id: p.id || `gen-${Date.now()}-${i}`,
+            id: p.id && p.id.length > 2 ? p.id : `gen-${Date.now()}-${i}`,
             type: p.type || 'PRODUCT'
         }));
       } else {
@@ -156,20 +157,6 @@ export const analyzeCompanyContext = async (
 
 // --- HELPERS ---
 
-function parseGeminiJson<T>(text: string): T {
-    try {
-        let jsonText = text || "{}";
-        const firstBrace = jsonText.indexOf('{');
-        const lastBrace = jsonText.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace !== -1) {
-            jsonText = jsonText.substring(firstBrace, lastBrace + 1);
-        }
-        return JSON.parse(jsonText) as T;
-    } catch (e) {
-        return {} as T;
-    }
-}
-
 function collectSources(response: GenerateContentResponse, sourcesList: Source[]) {
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
     if (chunks) {
@@ -186,40 +173,9 @@ function collectSources(response: GenerateContentResponse, sourcesList: Source[]
     }
 }
 
-// Helper: Fuzzy search in Memory Products
-const findProductsInMemory = (query: string, products: Product[]): Product[] => {
-    if (!products || products.length === 0) return [];
-    
-    const cleanQuery = query.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ ]/g, "").toLowerCase();
-    const queryTokens = cleanQuery.split(' ').map(t => t.trim()).filter(t => t.length > 0);
-
-    return products.filter(p => {
-        const lowerName = p.name.toLowerCase();
-        const lowerDesc = p.description.toLowerCase();
-        const lowerTags = p.tags ? p.tags.map(t => t.toLowerCase()) : [];
-        
-        // Exact substring match has high priority
-        if (lowerName.includes(cleanQuery)) return true;
-
-        let matches = 0;
-        let requiredMatches = 1;
-        if (queryTokens.length > 2) requiredMatches = 2;
-
-        queryTokens.forEach(token => {
-            if (token.length >= 2) {
-                const inName = lowerName.includes(token);
-                // Description match is less important for strict product lookup but good for context
-                const inTags = lowerTags.some(t => t.includes(token));
-                if (inName || inTags) matches++;
-            }
-        });
-        return matches >= requiredMatches;
-    }).slice(0, 3); // Limit manual lookup matches
-};
-
 /**
- * Sends a message to the chat model.
- * HYBRID MODE: Memory Lookup with inventory context injection.
+ * Sends a message to the chat model using STRUCTURED OUTPUT.
+ * This guarantees clean JSON without regex hacking.
  */
 export const sendMessageToBot = async (
   history: ChatMessage[],
@@ -236,52 +192,30 @@ export const sendMessageToBot = async (
   
   const botName = agentName || "Vendedor Experto";
   
-  // Convert CSV/Products to text context
+  // Convert Products to text context
   const inventoryContext = availableProducts.map(p => 
       `- [ID: ${p.id}] ${p.name} (${p.price || 'Consultar'}): ${p.description}.`
   ).join('\n');
 
   const contactContext = contactInfo ? `
-    CANALES DE CONTACTO OFICIALES (ÚSALOS SI ES NECESARIO):
-    - Soporte / Devoluciones / Garantías: ${contactInfo.support || 'No disponible'}
-    - Ventas Grandes / B2B: ${contactInfo.sales || 'No disponible'}
-    - Servicio Técnico: ${contactInfo.technical || 'No disponible'}
+    CANALES DE CONTACTO:
+    - Soporte: ${contactInfo.support || 'N/A'}
+    - Ventas: ${contactInfo.sales || 'N/A'}
+    - Técnico: ${contactInfo.technical || 'N/A'}
   ` : '';
 
   const langInstruction = language === 'en' ? "REPLY IN ENGLISH." : "RESPONDE EN ESPAÑOL.";
   
-  // PROMPT MAESTRO: DIRECTOR DE INTELIGENCIA DE DATOS
   const enhancedInstruction = `
     ${langInstruction}
     ---------------------------------------------------
     ROL: DIRECTOR DE INTELIGENCIA DE DATOS & VENTAS (Identidad: ${botName})
     ---------------------------------------------------
-    Eres el cerebro central de una empresa. Tu inteligencia no es generativa, es EXTRACTIVA y LITERAL.
-
-    ## TUS FUENTES DE VERDAD (JERARQUÍA):
-    1. **BASE DE DATOS (CSV/EXCEL):** Si tienes datos tabulares, SON SAGRADOS.
-       - Cruza Referencias (SKU) con Precios.
-       - Si el Excel dice "Stock: 0", el producto NO se vende.
-    2. **DOCUMENTACIÓN TÉCNICA (PDF):** Manuales y políticas.
-       - Úsalos para responder el "Cómo funciona" y las "Garantías".
-    3. **WEB (URL):** Úsala solo para obtener enlaces de compra si no están en el Excel.
-
-    ## REGLA DE ORO: "API SIMULADA"
-    Trata los archivos subidos y el inventario listado abajo como si fueran una respuesta API en tiempo real.
-    - No resumas el Excel. Búscalo.
-    - Si el usuario pregunta "Precio del grifo X", escanea la "columna precio" mentalmente.
-
-    ## GESTIÓN DE ENLACES (ANTI-404)
-    - Si el Excel tiene una columna "URL", úsala siempre.
-    - Si no, y la web tiene IDs raros (ej: \`?id=555\`), NO INVENTES. Usa [Google Search] para encontrar el link real.
-
-    ## FORMATO DE RESPUESTA
-    - Sé directo.
-    - Si detectas datos de producto, usa formato Card (Menciona el nombre exacto del producto en tu respuesta).
-    - Cita la fuente implícitamente: "Según vuestra tarifa 2024..."
+    1. **BASE DE DATOS (CSV/EXCEL):** SON SAGRADOS. Cruza Referencias (SKU) con Precios.
+    2. **DOCUMENTACIÓN TÉCNICA:** Úsala para responder garantías.
+    3. **REGLA DE ORO:** API SIMULADA. No inventes datos.
 
     TU BASE DE CONOCIMIENTO (INVENTARIO REAL):
-    Esta es tu única fuente de verdad para productos.
     ${inventoryContext}
 
     TUS INSTRUCCIONES ESPECÍFICAS (DEL DUEÑO):
@@ -289,73 +223,74 @@ export const sendMessageToBot = async (
     
     ${contactContext}
 
-    PROTOCOLOS DE ESCALADO Y SOPORTE (PRIORIDAD ALTA):
-    1. Si el cliente menciona: **Producto roto, golpe en transporte, garantía, devolución o fallo técnico grave**.
-       - **ACCIÓN:** DETÉN LA VENTA INMEDIATAMENTE.
-       - Muestra empatía extrema.
-       - Proporciona el email de Soporte/Técnico (${contactInfo?.support || contactInfo?.technical || 'Contacto de soporte'}) para que envíen fotos o gestionen la garantía.
-       - NO intentes vender nada más en este punto.
+    PROTOCOLOS:
+    - Si es garantía/roto -> Da el email de soporte y DETÉN VENTA.
+    - Si detectas intención de compra -> RECOMIENDA el producto exacto usando su ID en el campo JSON correspondiente.
 
-    REGLAS DE VISUALIZACIÓN (UI):
-    - NO uses Markdown JSON.
-    - NO inventes IDs en el texto visible.
-    - Si mencionas un producto que tenemos en inventario, usa su nombre exacto para que el sistema genere la Tarjeta de Producto visual.
+    IMPORTANTE:
+    Genera la respuesta usando el esquema JSON proporcionado. 
+    Pon tu respuesta conversacional en el campo "answer".
+    Pon los IDs de productos recomendados (si los hay) en el array "recommended_product_ids".
   `;
 
+  // Define Schema for Chat Response
+  const chatResponseSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+        answer: { 
+            type: Type.STRING, 
+            description: "La respuesta conversacional natural al usuario. NO incluyas JSON ni Markdown de código aquí." 
+        },
+        recommended_product_ids: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: "Lista de IDs exactos de los productos del inventario que se deben mostrar como tarjetas."
+        }
+    },
+    required: ["answer"]
+  };
+
   try {
-    const augmentedHistory = history.map(h => ({ role: h.role, parts: [{ text: h.text }] }));
+    // Only send the last few messages to keep context window manageable
+    const recentHistory = history.slice(-10).map(h => ({ role: h.role, parts: [{ text: h.text }] }));
 
     const chat = ai.chats.create({
       model: 'gemini-3-pro-preview', 
       config: {
         systemInstruction: enhancedInstruction,
-        temperature: 0.1, // Low temperature for literal accuracy
-        tools: [{ googleSearch: {} }], // Enable Google Search for link finding
+        temperature: 0.1, 
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: chatResponseSchema
       },
-      history: augmentedHistory
+      history: recentHistory
     });
 
     const result = await chat.sendMessage({ message: currentMessage });
-    let responseText = result.text || "";
-
-    // --- CLEANUP SAFETY NET (Post-procesado) ---
     
-    // 1. Eliminar IDs filtrados si el LLM falla (ej: [ID: XXX])
-    responseText = responseText.replace(/\[ID:\s*[^\]]+\]/gi, '');
-    responseText = responseText.replace(/\(ID:\s*[^)]+\)/gi, '');
+    // Parse the structured output
+    let structuredResponse: { answer: string; recommended_product_ids?: string[] } = { answer: "" };
     
-    // 2. Eliminar meta-headers comerciales explícitos
-    responseText = responseText.replace(/###\s*Propuesta de Valor.*?(\n|$)/gi, '');
-    responseText = responseText.replace(/\*\*Propuesta de Valor.*?\*\*/gi, '');
-    responseText = responseText.replace(/###\s*Cross-selling.*?(\n|$)/gi, '');
+    try {
+        structuredResponse = JSON.parse(result.text || '{"answer": ""}');
+    } catch (e) {
+        // Fallback if model fails strictly
+        structuredResponse = { answer: result.text || "" };
+    }
 
-    // 3. CRÍTICO: Eliminar bloques de JSON y residuos de código
-    responseText = responseText.replace(/```[\s\S]*?```/g, '');
-    responseText = responseText.replace(/{[\s\n]*"products"[\s\S]*?}/g, '');
-    
-    // 4. LIMPIEZA AGRESIVA DE SÍMBOLOS FINALES
-    responseText = responseText.replace(/[\s\n]+[}\]]+[\s\n]*[}\]]*$/g, '');
-
-    // Post-processing for Cards
+    // Match recommended IDs back to full product objects
     const foundCards: Product[] = [];
-    const lowerResponse = responseText.toLowerCase();
-
-    // 1. Detección ESTRICTA: Solo mostrar productos que el BOT ha mencionado explícitamente.
-    availableProducts.forEach(prod => {
-        // Normalizamos nombre e ID para búsqueda flexible
-        const lowerName = prod.name.toLowerCase();
-        const lowerId = prod.id.toLowerCase();
-        
-        // Verificamos si el nombre exacto o el ID aparecen en el texto generado
-        if (lowerResponse.includes(lowerId) || lowerResponse.includes(lowerName)) {
-            if (!foundCards.find(c => c.id === prod.id)) {
-                foundCards.push(prod);
+    if (structuredResponse.recommended_product_ids && Array.isArray(structuredResponse.recommended_product_ids)) {
+        structuredResponse.recommended_product_ids.forEach(id => {
+            const product = availableProducts.find(p => p.id === id);
+            if (product && !foundCards.some(c => c.id === product.id)) {
+                foundCards.push(product);
             }
-        }
-    });
+        });
+    }
 
     return {
-      text: responseText.trim(),
+      text: structuredResponse.answer,
       productCards: foundCards.length > 0 ? foundCards : undefined
     };
 

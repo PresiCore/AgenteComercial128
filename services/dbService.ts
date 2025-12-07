@@ -42,18 +42,8 @@ export const dbService = {
    * Validates a token against the Firestore 'clients' collection.
    */
   validateToken: async (token: string): Promise<UserSession | null> => {
-    // 1. Hardcoded Admin Backdoor
-    if (token === 'ADMIN_TOKEN_SECURE_128') {
-      return {
-        token,
-        email: 'admin@128brand.com',
-        isActive: true,
-        role: 'admin'
-      };
-    }
-
     try {
-      // 2. Query Firestore for the client token
+      // Query Firestore for the client token
       const clientsRef = collection(db, "clients");
       const q = query(clientsRef, where("token", "==", token));
       const querySnapshot = await getDocs(q);
